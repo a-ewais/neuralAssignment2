@@ -39,9 +39,9 @@ tf.app.flags.DEFINE_string('summaries_dir', '/tmp/retrain_logs',
                            """Where to save summary logs for TensorBoard.""")
 
 # Details of the training configuration.
-tf.app.flags.DEFINE_integer('how_many_training_steps', 8000,
+tf.app.flags.DEFINE_integer('how_many_training_steps', 15000,
                             """How many training steps to run before ending.""")
-tf.app.flags.DEFINE_float('learning_rate', 0.001,
+tf.app.flags.DEFINE_float('learning_rate', 0.01,
                           """How large a learning rate to use when training.""")
 
 tf.app.flags.DEFINE_integer('eval_step_interval', 10,
@@ -497,10 +497,10 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
     # Organizing the following ops as `final_training_ops` so they're easier
     # to see in TensorBoard
     layer_name = 'mid_layer'
-    with tf.name_scope('mid Layer'):
+    with tf.name_scope(layer_name):
         with tf.name_scope('weights'):
             layer_weights = tf.Variable(tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, 1000], stddev=0.001),
-                                        name='final_weights')
+                                        name='mid_weights')
             variable_summaries(layer_weights, layer_name + '/weights')
         with tf.name_scope('biases'):
             layer_biases = tf.Variable(tf.zeros([1000]), name='final_biases')
@@ -509,7 +509,7 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
             mid = tf.matmul(bottleneck_input, layer_weights) + layer_biases
             tf.histogram_summary(layer_name + '/pre_activations', mid)
     mid_output = tf.nn.relu(mid, name='midLayer')
-    tf.histogram_summary(final_tensor_name + '/activations', mid_output)
+    tf.histogram_summary(layer_name + '/activations', mid_output)
     layer_name= 'last_layer'
     with tf.name_scope(layer_name):
         with tf.name_scope('weights2'):
