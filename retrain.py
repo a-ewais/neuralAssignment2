@@ -41,7 +41,7 @@ tf.app.flags.DEFINE_string('summaries_dir', '/tmp/retrain_logs',
 # Details of the training configuration.
 tf.app.flags.DEFINE_integer('how_many_training_steps', 8000,
                             """How many training steps to run before ending.""")
-tf.app.flags.DEFINE_float('learning_rate', 0.005,
+tf.app.flags.DEFINE_float('learning_rate', 0.001,
                           """How large a learning rate to use when training.""")
 
 tf.app.flags.DEFINE_integer('eval_step_interval', 10,
@@ -335,7 +335,7 @@ def get_or_create_bottleneck(sess, image_lists, label_name, index, image_dir,
     bottleneck_path = get_bottleneck_path(image_lists, label_name, index,
                                           bottleneck_dir, category)
     if not os.path.exists(bottleneck_path):
-        print('Creating bottleneck at ' + bottleneck_path)
+        #print('Creating bottleneck at ' + bottleneck_path)
         image_path = get_image_path(image_lists, label_name, index, image_dir,
                                     category)
         if not gfile.Exists(image_path):
@@ -432,6 +432,25 @@ def get_random_cached_bottlenecks(sess, image_lists, how_many, category,
         ground_truths.append(ground_truth)
     return bottlenecks, ground_truths
 
+def get_test_bottlenecks(sess, image_lists, how_many, category,
+                                  bottleneck_dir, image_dir, jpeg_data_tensor,
+                                  bottleneck_tensor):
+    class_count = len(image_lists.keys())
+    bottlenecks = []
+    ground_truths = []
+    for label_index in range(class_count):
+        label_name = list(image_lists.keys())[label_index]
+        for image_index in range(len(image_lists[label_name]['validation'])):
+            bottleneck = get_or_create_bottleneck(sess, image_lists, label_name,
+                                                  image_index, image_dir, category,
+                                                  bottleneck_dir, jpeg_data_tensor,
+                                                  bottleneck_tensor)
+            ground_truth = np.zeros(class_count, dtype=np.float32)
+            ground_truth[label_index] = 1.0
+            bottlenecks.append(bottleneck)
+            ground_truths.append(ground_truth)
+    return bottlenecks, ground_truths
+
 
 def variable_summaries(var, name):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
@@ -477,17 +496,31 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
 
     # Organizing the following ops as `final_training_ops` so they're easier
     # to see in TensorBoard
-    layer_name = 'final_training_ops'
-    with tf.name_scope(layer_name):
+    layer_name = 'mid_layer'
+    with tf.name_scope('mid Layer'):
         with tf.name_scope('weights'):
-            layer_weights = tf.Variable(tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, class_count], stddev=0.001),
+            layer_weights = tf.Variable(tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, 1000], stddev=0.001),
                                         name='final_weights')
             variable_summaries(layer_weights, layer_name + '/weights')
         with tf.name_scope('biases'):
-            layer_biases = tf.Variable(tf.zeros([class_count]), name='final_biases')
+            layer_biases = tf.Variable(tf.zeros([1000]), name='final_biases')
             variable_summaries(layer_biases, layer_name + '/biases')
         with tf.name_scope('Wx_plus_b'):
-            logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
+            mid = tf.matmul(bottleneck_input, layer_weights) + layer_biases
+            tf.histogram_summary(layer_name + '/pre_activations', mid)
+    mid_output = tf.nn.relu(mid, name='midLayer')
+    tf.histogram_summary(final_tensor_name + '/activations', mid_output)
+    layer_name= 'last_layer'
+    with tf.name_scope(layer_name):
+        with tf.name_scope('weights2'):
+            layer_weights2 = tf.Variable(tf.truncated_normal([1000, class_count], stddev=0.001),
+                                        name='final_weights')
+            variable_summaries(layer_weights2, layer_name + '/weights')
+        with tf.name_scope('biases2'):
+            layer_biases2 = tf.Variable(tf.zeros([class_count]), name='final_biases')
+            variable_summaries(layer_biases2, layer_name + '/biases')
+        with tf.name_scope('Wx_plus_b2'):
+            logits = tf.matmul(mid_output, layer_weights2) + layer_biases2
             tf.histogram_summary(layer_name + '/pre_activations', logits)
 
     final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
@@ -529,6 +562,14 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
     return evaluation_step
 
 
+
+def my_evaluation_step(result_tensor,ground_truth_tensor):
+    labels = tf.argmax(ground_truth_tensor, 1)
+    topFive = tf.nn.in_top_k(result_tensor, labels, 5)
+    print(topFive)
+    res=tf.reduce_mean(tf.cast(topFive, tf.float32))
+    return res
+
 def main(_):
     # Setup the directory we'll write summaries to for TensorBoard
     if tf.gfile.Exists(FLAGS.summaries_dir):
@@ -553,7 +594,7 @@ def main(_):
         return -1
 
     # See if the command-line flags mean we're applying any distortions.
-    sess = tf.Session()
+    sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
     # We'll make sure we've calculated the 'bottleneck' image summaries and
     # cached them on disk.
     cache_bottlenecks(sess, image_lists, FLAGS.image_dir, FLAGS.bottleneck_dir,
@@ -567,6 +608,7 @@ def main(_):
 
     # Create the operations we need to evaluate the accuracy of our new layer.
     evaluation_step = add_evaluation_step(final_tensor, ground_truth_input)
+    test_evaluation_step = my_evaluation_step(final_tensor,ground_truth_input)
 
     # Merge all the summaries and write them out to /tmp/retrain_logs (by default)
     merged = tf.merge_all_summaries()
@@ -624,12 +666,12 @@ def main(_):
 
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
-    test_bottlenecks, test_ground_truth = get_random_cached_bottlenecks(
+    test_bottlenecks, test_ground_truth = get_test_bottlenecks(
         sess, image_lists, FLAGS.test_batch_size, 'testing',
         FLAGS.bottleneck_dir, FLAGS.image_dir, jpeg_data_tensor,
         bottleneck_tensor)
     test_accuracy = sess.run(
-        evaluation_step,
+        test_evaluation_step,
         feed_dict={bottleneck_input: test_bottlenecks,
                    ground_truth_input: test_ground_truth})
     print('Final test accuracy = %.1f%%' % (test_accuracy * 100))
