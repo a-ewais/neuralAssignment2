@@ -39,7 +39,7 @@ tf.app.flags.DEFINE_string('summaries_dir', '/tmp/retrain_logs',
                            """Where to save summary logs for TensorBoard.""")
 
 # Details of the training configuration.
-tf.app.flags.DEFINE_integer('how_many_training_steps', 15000,
+tf.app.flags.DEFINE_integer('how_many_training_steps', 5000,
                             """How many training steps to run before ending.""")
 tf.app.flags.DEFINE_float('learning_rate', 0.01,
                           """How large a learning rate to use when training.""")
@@ -466,79 +466,65 @@ def variable_summaries(var, name):
 
 
 def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
-    """Adds a new softmax and fully-connected layer for training.
+  """Adds a new softmax and fully-connected layer for training.
 
-    We need to retrain the top layer to identify our new classes, so this function
-    adds the right operations to the graph, along with some variables to hold the
-    weights, and then sets up all the gradients for the backward pass.
+  We need to retrain the top layer to identify our new classes, so this function
+  adds the right operations to the graph, along with some variables to hold the
+  weights, and then sets up all the gradients for the backward pass.
 
-    The set up for the softmax and fully-connected layers is based on:
-    https://tensorflow.org/versions/master/tutorials/mnist/beginners/index.html
+  The set up for the softmax and fully-connected layers is based on:
+  https://tensorflow.org/versions/master/tutorials/mnist/beginners/index.html
 
-    Args:
-      class_count: Integer of how many categories of things we're trying to
-      recognize.
-      final_tensor_name: Name string for the new final node that produces results.
-      bottleneck_tensor: The output of the main CNN graph.
+  Args:
+    class_count: Integer of how many categories of things we're trying to
+    recognize.
+    final_tensor_name: Name string for the new final node that produces results.
+    bottleneck_tensor: The output of the main CNN graph.
 
-    Returns:
-      The tensors for the training and cross entropy results, and tensors for the
-      bottleneck input and ground truth input.
-    """
-    with tf.name_scope('input'):
-        bottleneck_input = tf.placeholder_with_default(
-            bottleneck_tensor, shape=[None, BOTTLENECK_TENSOR_SIZE],
-            name='BottleneckInputPlaceholder')
+  Returns:
+    The tensors for the training and cross entropy results, and tensors for the
+    bottleneck input and ground truth input.
+  """
+  with tf.name_scope('input'):
+    bottleneck_input = tf.placeholder_with_default(
+        bottleneck_tensor, shape=[None, BOTTLENECK_TENSOR_SIZE],
+        name='BottleneckInputPlaceholder')
 
-        ground_truth_input = tf.placeholder(tf.float32,
-                                            [None, class_count],
-                                            name='GroundTruthInput')
+    ground_truth_input = tf.placeholder(tf.float32,
+                                        [None, class_count],
+                                        name='GroundTruthInput')
 
-    # Organizing the following ops as `final_training_ops` so they're easier
-    # to see in TensorBoard
-    layer_name = 'mid_layer'
-    with tf.name_scope(layer_name):
-        with tf.name_scope('weights'):
-            layer_weights = tf.Variable(tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, 1000], stddev=0.001),
-                                        name='mid_weights')
-            variable_summaries(layer_weights, layer_name + '/weights')
-        with tf.name_scope('biases'):
-            layer_biases = tf.Variable(tf.zeros([1000]), name='final_biases')
-            variable_summaries(layer_biases, layer_name + '/biases')
-        with tf.name_scope('Wx_plus_b'):
-            mid = tf.matmul(bottleneck_input, layer_weights) + layer_biases
-            tf.histogram_summary(layer_name + '/pre_activations', mid)
-    mid_output = tf.nn.relu(mid, name='midLayer')
-    tf.histogram_summary(layer_name + '/activations', mid_output)
-    layer_name= 'last_layer'
-    with tf.name_scope(layer_name):
-        with tf.name_scope('weights2'):
-            layer_weights2 = tf.Variable(tf.truncated_normal([1000, class_count], stddev=0.001),
-                                        name='final_weights')
-            variable_summaries(layer_weights2, layer_name + '/weights')
-        with tf.name_scope('biases2'):
-            layer_biases2 = tf.Variable(tf.zeros([class_count]), name='final_biases')
-            variable_summaries(layer_biases2, layer_name + '/biases')
-        with tf.name_scope('Wx_plus_b2'):
-            logits = tf.matmul(mid_output, layer_weights2) + layer_biases2
-            tf.histogram_summary(layer_name + '/pre_activations', logits)
+  # Organizing the following ops as `final_training_ops` so they're easier
+  # to see in TensorBoard
+  layer_name = 'final_training_ops'
+  with tf.name_scope(layer_name):
+    with tf.name_scope('weights'):
+      layer_weights = tf.Variable(tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, class_count], stddev=0.001), name='final_weights')
+      variable_summaries(layer_weights, layer_name + '/weights')
+    with tf.name_scope('biases'):
+      layer_biases = tf.Variable(tf.zeros([class_count]), name='final_biases')
+      variable_summaries(layer_biases, layer_name + '/biases')
+    with tf.name_scope('Wx_plus_b'):
+      logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
+      tf.histogram_summary(layer_name + '/pre_activations', logits)
 
-    final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
-    tf.histogram_summary(final_tensor_name + '/activations', final_tensor)
+  final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
+  tf.histogram_summary(final_tensor_name + '/activations', final_tensor)
 
-    with tf.name_scope('cross_entropy'):
-        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
-            logits, ground_truth_input)
-        with tf.name_scope('total'):
-            cross_entropy_mean = tf.reduce_mean(cross_entropy)
-        tf.scalar_summary('cross entropy', cross_entropy_mean)
+  with tf.name_scope('cross_entropy'):
+    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+      logits, ground_truth_input)
+    with tf.name_scope('total'):
+      cross_entropy_mean = tf.reduce_mean(cross_entropy)
+    tf.scalar_summary('cross entropy', cross_entropy_mean)
 
-    with tf.name_scope('train'):
-        train_step = tf.train.GradientDescentOptimizer(FLAGS.learning_rate).minimize(
-            cross_entropy_mean)
+  with tf.name_scope('train'):
+    train_step = tf.train.GradientDescentOptimizer(FLAGS.learning_rate).minimize(
+        cross_entropy_mean)
 
-    return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
-            final_tensor)
+  return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
+          final_tensor)
+
 
 
 def add_evaluation_step(result_tensor, ground_truth_tensor):
